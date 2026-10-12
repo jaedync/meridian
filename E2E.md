@@ -1078,6 +1078,38 @@ dispatch with a fixture upstream, not a claim that the real Claude model chose
 a bare name. Keep the affected-model Pi live gate alongside them when accepting
 passthrough changes.
 
+The unparseable-arguments control covers a Pi failure seen with fine-grained
+tool streaming on: an edit call ended in `Reached maximum number of turns (1)`.
+The fixture streams a registered-name call whose arguments hold a raw TAB
+inside a JSON string. The real CLI rejects it before PreToolUse with
+`InputValidationError: … could not be parsed as JSON`. Meridian must deliver
+the complete call as strict JSON with `stop_reason: tool_use`. It must evict
+the rejected SDK session and replay the client's result into a fresh one:
+
+```bash
+bun scripts/e2e-capped-turns.mjs --case=unparsed-input --stream
+bun scripts/e2e-capped-turns.mjs --case=unparsed-input --stream --headerless
+bun scripts/e2e-capped-turns.mjs --case=unparsed-input --stream --deferred
+```
+
+The actual-client control runs real Pi against the same kind of fixture. Pi
+must apply the rejected edit to a TAB-indented file and finish the follow-up
+turn. `--expect-baseline` asserts the unfixed failure: no edit, and Pi exits
+on `Reached maximum number of turns (1)`:
+
+```bash
+bun scripts/e2e-pi-unparsed-tool-input.mjs
+bun scripts/e2e-pi-unparsed-tool-input.mjs --expect-baseline   # without the fix
+```
+
+**Verified 2026-10-12:** macOS arm64, Bun 1.3.14, Agent SDK 0.2.141, Claude
+Code 2.1.296, Pi 1.1.0. With the fix, all four commands pass. Without it
+(base b68710f), the three capped-turn commands end in an SSE `api_error`
+frame (`(4)` with `--deferred`), and only `--expect-baseline` passes. The 17
+other capped-turn and client-refusal commands above still pass. In three live
+Pi runs with Claude Opus 5.5, the model did not emit a raw TAB. The fixture is
+the only reproduction.
+
 For the affected model and Pi adapter on Linux, also run the live
 multi-turn control (real Claude Team account, not the fixture upstream):
 
