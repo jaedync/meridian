@@ -12,8 +12,8 @@
  *   anthropic-beta: oauth-2025-04-20
  *
  * We reuse `tokenRefresh.ts`'s cross-platform credential store (macOS Keychain
- * or `~/.claude/.credentials.json`) to read the access token, and trigger a
- * background refresh on 401.
+ * or `~/.claude/.credentials.json`) to read the access token. We refresh it on
+ * 401, and before the call when it has expired.
  *
  * Per-profile caching: each profile has its own 30s TTL cache so multi-account
  * setups can be queried independently without cross-contamination. Concurrent
@@ -21,6 +21,7 @@
  */
 
 import { claudeLog } from "../logger"
+import { isCredentialsReadOnly } from "./credentialsMode"
 import { parseRetryAfterMs } from "./retryAfter"
 import { createPlatformCredentialStore, refreshOAuthToken, type CredentialStore } from "./tokenRefresh"
 
@@ -187,6 +188,12 @@ const CACHE_TTL_MS_DEFAULT = 30_000
 // this bound, so genuinely dead credentials still surface as missing data.
 const STALE_MAX_MS_DEFAULT = 15 * 60_000
 const RATE_LIMIT_BACKOFF_MS_DEFAULT = 60_000
+// Refresh this close to `expiresAt` rather than send a token the endpoint is
+// about to reject. The background scheduler normally renews first, so this is
+// a backup for a renewal it missed (a timer that fired late after sleep, or a
+// failed refresh before its retry). An expired token has drawn 429s from this
+// endpoint, not 401s, so the 401 path alone does not cover it.
+const EXPIRY_REFRESH_MARGIN_MS = 60_000
 
 /** Per-profile cache. Key = profileId (or DEFAULT_KEY for the unscoped default). */
 const cacheByProfile = new Map<string, OAuthUsageSnapshot>()
@@ -292,6 +299,36 @@ async function readAccessToken(store: CredentialStore): Promise<string | null> {
   return creds?.claudeAiOauth?.accessToken ?? null
 }
 
+type RefreshFn = (store: CredentialStore) => Promise<boolean>
+
+/** Refresh, then read back the new token. Null when either step fails. */
+async function refreshAndRead(store: CredentialStore, refresh: RefreshFn, cacheKey: string, trigger: string): Promise<string | null> {
+  if (await refresh(store)) {
+    const token = await readAccessToken(store)
+    if (token) return token
+  }
+  claudeLog("oauth_usage.refresh_failed", { profile: cacheKey, trigger })
+  return null
+}
+
+/**
+ * The token to send: the stored one, or a new one when the stored one has
+ * expired. A failed refresh still sends the stored token, so the call reports
+ * what upstream thinks of it (and a 401 takes its own refresh path).
+ *
+ * Read-only instances skip this quietly, as `ensureFreshToken` does: it runs
+ * on every check, and the instance that owns the credentials renews them.
+ */
+async function tokenForCall(store: CredentialStore, refresh: RefreshFn, cacheKey: string): Promise<string | null> {
+  const oauth = (await store.read())?.claudeAiOauth
+  const token = oauth?.accessToken ?? null
+  const expiresAt = oauth?.expiresAt
+  if (!token || typeof expiresAt !== "number" || expiresAt - Date.now() > EXPIRY_REFRESH_MARGIN_MS) return token
+  if (isCredentialsReadOnly()) return token
+  claudeLog("oauth_usage.refresh_on_expiry", { profile: cacheKey })
+  return (await refreshAndRead(store, refresh, cacheKey, "expiry")) ?? token
+}
+
 /** Minimal fetch shape used by callAnthropic. Avoids `typeof fetch`'s
  *  `preconnect` property, which makes test casts unwieldy. */
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
@@ -329,6 +366,8 @@ export interface FetchOAuthUsageOpts {
   profileId?: string | null
   claudeConfigDir?: string
   fetchImpl?: FetchLike
+  /** Override the token refresh (for testing). Defaults to refreshOAuthToken. */
+  refreshImpl?: RefreshFn
 }
 
 /**
@@ -451,10 +490,11 @@ async function fetchOAuthUsageImpl(opts?: FetchOAuthUsageOpts): Promise<RawUsage
 
   const store = opts?.store ?? createPlatformCredentialStore({ claudeConfigDir: opts?.claudeConfigDir })
   const rateLimitBackoffMs = opts?.rateLimitBackoffMs ?? RATE_LIMIT_BACKOFF_MS_DEFAULT
+  const refresh = opts?.refreshImpl ?? refreshOAuthToken
 
   const promise = (async () => {
     try {
-      const token = await readAccessToken(store)
+      const token = await tokenForCall(store, refresh, cacheKey)
       if (!token) {
         // This read failing intermittently (e.g. a Keychain entry racing a
         // token-refresh rewrite) was previously silent — log it so flapping
@@ -466,7 +506,7 @@ async function fetchOAuthUsageImpl(opts?: FetchOAuthUsageOpts): Promise<RawUsage
       let result = await callAnthropic(token, fetchImpl)
       if ("__status" in result && result.__status === 401) {
         claudeLog("oauth_usage.token_refresh_attempt", { profile: cacheKey })
-        const refreshed = await refreshOAuthToken(store)
+        const refreshed = await refresh(store)
         if (!refreshed) {
           claudeLog("oauth_usage.refresh_failed", { profile: cacheKey })
           // Not `no_token`: the token is present, and a read-only instance
