@@ -15,8 +15,9 @@ describe("repairJsonStringLiterals", () => {
     expect(repairJsonStringLiterals('{\n\t"a": 1\n}')).toBe('{\n\t"a": 1\n}')
   })
 
-  it("doubles a backslash before an invalid escape character", () => {
-    expect(repairJsonStringLiterals('{"p":"C:\\dev\\x"}')).toBe('{"p":"C:\\\\dev\\\\x"}')
+  it("leaves invalid backslash escapes untouched for the parser to reject without corrupting paths", () => {
+    expect(repairJsonStringLiterals('{"p":"C:\\dev\\x"}')).toBe('{"p":"C:\\dev\\x"}')
+    expect(repairJsonStringLiterals('{"p":"C:\\Users\\new"}')).toBe('{"p":"C:\\Users\\new"}')
   })
 
   it("keeps valid escapes, including \\u with four hex digits", () => {
@@ -58,8 +59,10 @@ describe("parseToolInputObject", () => {
     expect(parseToolInputObject('{"command":"echo a\necho b"}')).toEqual({ command: "echo a\necho b" })
   })
 
-  it("parses an object whose strings hold an invalid escape", () => {
-    expect(parseToolInputObject('{"file_path":"C:\\dev\\x.md"}')).toEqual({ file_path: "C:\\dev\\x.md" })
+  it("rejects an object whose strings hold an invalid backslash escape (including mixed C:\\Users\\new)", () => {
+    expect(parseToolInputObject('{"file_path":"C:\\dev\\x.md"}')).toBeUndefined()
+    expect(parseToolInputObject('{"file_path":"C:\\Users\\new"}')).toBeUndefined()
+    expect(parseToolInputObject('{"file_path":"C:\\Users\\new\tfile.md"}')).toBeUndefined()
   })
 
   it("rejects truncated JSON, repaired or not", () => {

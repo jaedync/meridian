@@ -875,8 +875,10 @@ export function cliRejectedToolResults(content: unknown): Array<{ id: string; na
  * so drops do not veto a confirmed rejection. The opt-in path has no such
  * proof and stays at the one-turn cap with no drops.
  *
- * Callers must also verify no cancellation, an open envelope, complete
- * blocks, and names declared by the client.
+ * Callers must also verify no cancellation, an open envelope and complete
+ * blocks. The opt-in path additionally requires names the client declared;
+ * a confirmed rejection does not, because the client answers an unknown name
+ * itself and the rejection already proves the call ran nowhere.
  */
 export function canRecoverUncapturedToolUses(input: UncapturedRecoveryInput): boolean {
   return uncapturedRecoveryVeto(input) === undefined

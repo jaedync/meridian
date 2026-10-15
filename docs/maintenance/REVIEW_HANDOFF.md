@@ -1,3 +1,174 @@
+## STOP: contributor attribution — #1363 (2026-10-13)
+
+Read this before touching any contributor PR. Entries below that record credit
+as "`Co-authored-by` present" or "Author/AuthorDate preserved" describe a
+cherry-pick on a maintainer branch that was then squashed; the commit on `main`
+names the maintainer as Author. Those notes are not evidence of credit. The
+verified record is the [attribution ledger](ATTRIBUTION_LEDGER.md).
+
+The integration-PR procedure is withdrawn. Follow
+[Contributor pull requests](../../.agents/references/contributing.md#contributor-pull-requests):
+merge the contributor's own PR, push fixes to their branch, never close silently.
+
+Open maintainer drafts that carry contributor commits. **Do not squash-merge
+them.** The maintainer commits in each belong on the contributor's branch, and
+the contributor's PR is what merges:
+
+| Draft | Carries | Contributor PR to merge instead |
+|---|---|---|
+| #1362 | @Nowaker `13abefad5` | #1360 — merged; #1362 closed unmerged |
+| #1317 | @Cd1s `80d4b9667` | #1314 (unsigned, `BLOCKED`) |
+| #1322 | @passabilities (10), @justprosh (7), @Nowaker (1) | #1211 and #1231 — merged; #1292 still open; Nowaker's `52965e113` is from closed #1283 |
+
+Corrections to past PRs (reopening, comment edits, release notes, any rewrite of
+`main`) are the owner's decisions in #1363. Do not start them from this note.
+
+## Contributor merges under the new process (2026-10-13)
+
+Each landed as the contributor's own PR. Author is the output of
+`git log -1 --format='%an <%ae>'` on `origin/main`.
+
+| PR | Landed | Author on `main` | Maintainer commits on their branch | Path |
+|---|---|---|---|---|
+| #1360 | `58c4126c3` | Damian Nowak (@Nowaker) | tests, CLI help, evidence, merge of `main` | direct (signed) |
+| #1213 | `55edbcc35` | Robert (@robertn702) | conflict resolution, two test corrections, doc correction, live gate | `--admin` (unsigned) |
+| #1201 | `fa4266e16` | jmuz (@XInTheDark) | conflict-free merge of `main` only | `--admin` (unsigned), explicit `--body`, no maintainer trailer |
+| #1370 | `431ec2014` | Aleksey Proshutinskiy (@justprosh) | none | `--admin` (unsigned), explicit `--body`, no maintainer trailer |
+| #1211 | `eb1f46211` | passabilities.eth (@passabilities) | merge of `main` only | direct, explicit `--body`, no maintainer trailer |
+| #1231 | `84e161b9c` | passabilities.eth (@passabilities) | merge of `main` after #1211 (conflicts resolved to the PR's side) | direct, explicit `--body`, no maintainer trailer |
+| #1224 | `09ae9316f` | Damian Nowak (@Nowaker) | contract corrections for #1282 (`948336443`), two merges of `main` | direct, explicit `--body` with a maintainer `Co-authored-by` (the fix changed) |
+| #1292 | `cbed8faaa` | Aleksey Proshutinskiy (@justprosh) | merge of `main`, one test and comment update for #1349 (`7bc3f87fe`) | `--admin` (unsigned), explicit `--body`, no maintainer trailer |
+| #1232 | `0559c554d` | Damian Nowak (@Nowaker) | contract corrections for #1281 (`4539ece6b`) | direct, explicit `--body` with a maintainer `Co-authored-by` (the fix changed) |
+| #1297 | `74ee96752` | Aleksey Proshutinskiy (@justprosh) | merge of `main` only | `--admin` (unsigned), explicit `--body`, no maintainer trailer |
+
+- #1382 (@Cd1s, Antigravity prompt byte budget): merged `72dd81384` as the
+  contributor's own PR (`Cd1s <135119404+Cd1s@users.noreply.github.com>` is
+  Author on `main`). [Evidence](evidence/1382-1376-1374-1380-20261015/README.md).
+  89/89 focused tests, full suite, build, final-head CI, live Pi 1.2.0 + official
+  agy 1.2.7 (`gemini-3.8-flash-low`) before/after: `main` (`626a17516`) sent
+  249,381 B and lost the newest turn (`NEWEST_TURN_LOST`); `#1382` (`6b372b342`)
+  sent 169,853 B and delivered newest tail, oldest head, and nonce (`NEWEST_TURN_DELIVERED`).
+- #1376 (@TristanSpeakEasy, route streamed OpenAI tool arguments by content block):
+  merged `7c935a407` as the contributor's own PR (`Tristan Cartledge` is Author
+  on `main`). [Evidence](evidence/1382-1376-1374-1380-20261015/README.md).
+  174/174 focused tests, full suite, build, final-head CI, and live
+  `/v1/chat/completions` parallel tool-call streaming verification.
+- #1374 (@mradwankhalil, default thinking display to `summarized` under Thinking
+  Passthrough): merged `769f6b9c9` as the contributor's own PR (`Mohamed R. Khalil`
+  is Author on `main`). [Evidence](evidence/1382-1376-1374-1380-20261015/README.md).
+  50/50 focused tests, full suite, build, final-head CI, and live `claude-opus-4-7`
+  passthrough before/after (0 thinking chars on `main` vs 137 thinking chars on
+  `#1374`, with `display: "omitted"` negative control staying at 0).
+- `meridian-plugin-opencode-scrub` #22 (@mradwankhalil, `cf047f8`) and #23
+  (@sergiomarquezdev, `c59fa18`): merged as the contributors' own PRs with
+  verified Git authorship on `main`, closing issue #21 and superseding draft #24
+  (closed unmerged). Package/parser boundary E2E (`scripts/e2e-cwd-package.mjs`,
+  48/48 cases PASS) landed in maintainer PR #25 (`456c471`).
+- #1380 (reported by @Flagg0096, session-turn watchdog timer leak on cancelled
+  lease waiter): fixed in `releaseSessionTurn` (`src/proxy/server.ts`) with
+  deterministic regression coverage in `src/__tests__/proxy-concurrency-coordination.test.ts`.
+- #1377 (@Nowaker, ChatGPT subscription backend, 146 files / +30,840 lines):
+  reviewed at `10c7b6cee` and held for explicit owner product and API-contract
+  approval (modifies `ProxyConfig`, `/profiles/list`, `/health`, `/readyz`,
+  `/inflight`, `/v1/models`, and adds `/v1/images/*` without an approved
+  contract issue).
+- #1213: [evidence](evidence/1213-sonnet-native-context-20261013/README.md).
+  5,773 local tests, build, final-head CI, live OpenCode 2.0.16 / Sonnet 5.5
+  before/after on macOS arm64. Not carried from the earlier draft: the exact-id
+  restriction and `CLAUDE_CODE_DISABLE_1M_CONTEXT` handling; the second is an
+  open follow-up if wanted. Issue #1212 closed by the merge.
+- #1201: [evidence](evidence/1201-per-call-results-20261013/README.md).
+  5,766 local tests, build, final-head CI, live Opus 5.5 `/v1/responses`
+  before/after. Its CI runs needed first-time-contributor approval. The landed
+  patch is identical to the contributor's commit. The reporter's own client was
+  not run.
+- #1370: [evidence](evidence/1370-digest-turn-live-20261013/README.md). Local
+  `npm test` and build, final-head CI, live Opus 5.5 before/after: three model
+  requests per deferred hand-off on unchanged `main`, one with the fix. Issue
+  #1367 closed by the merge.
+- #1211: [evidence](evidence/1211-auto-mode-classifier-live-20261013/README.md).
+  Local `npm test` and build, final-head CI, live E71 with Claude Code 2.1.296:
+  3 of 6 main requests resumed on unchanged `main`, 6 of 6 with the fix. Open
+  follow-up: the classifier's second stage sends no stop sequences and is not
+  detected (not a regression).
+- #1231: [evidence](evidence/1231-subagent-session-live-20261013/README.md).
+  Local `npm test` and build, final-head CI, live E72 with Claude Code 2.1.296:
+  0 of 4 subagent turns resumed and lease waits up to 3.5 s on `main`, 4 of 4
+  and 4 ms with the fix.
+- #1224: [evidence](evidence/1224-drain-live-20261013/README.md). The route
+  follows the #1282 contract after the maintainer correction commit. Local
+  `npm test` and build, final-head CI, live E74 before/after with Opus 5.5.
+  Known limitation: under Bun a held client that disconnects is not released
+  until the hold ends.
+- #1292: [evidence](evidence/1292-captions-interactive-20261014/README.md).
+  Live interactive Claude Code 2.1.299: on `main` each subagent's turn after a
+  caption replays (`modified-history`); with the fix captions are auxiliary and
+  the next turn resumes. Escrowed as E77. Fixes #1288.
+- #1232: [evidence](evidence/1232-reachability-live-20261014/README.md). Nine
+  contract gaps corrected on the branch; live E75 outage and recovery on real
+  egress. Closes #1281.
+- #1297: [evidence](evidence/1297-auxiliary-cache-20261014/README.md). Live E76
+  with Sonnet 5.5: later captions write 4.8k cache tokens instead of 11–13k.
+- #1260 (@Nowaker, login expiry): reviewed against contract #1270. Most of the
+  PR (the `auth-lifecycle.json` history, five extra `/profiles/list` fields,
+  login/logout UI rows) is outside the approved contract. A maintainer commit
+  narrowing it to #1270 is prepared locally on `pr-1260` (`8e86d8144`; full
+  suite and build pass) but not pushed: it deletes about 600 lines of the
+  contributor's work, so pushing it versus asking the contributor to narrow the
+  PR is the owner's decision.
+- #1373 (maintainer fix for #1364, reported and isolated by @imarshallwidjaja):
+  merged `8d447ea35`. A CLI-rejected tool call with an undeclared name now
+  reaches the client as `tool_use` in streaming passthrough. Fixture stand with
+  real Claude Code 2.1.296 fails before and passes after; no live model run
+  (a model cannot be made to emit an undeclared name). Non-streaming and the
+  CLI's "… is disabled for this session" refusal wording remain unhandled.
+- #1340 (@Cd1s, Antigravity replayed tool calls) was re-reviewed at
+  `c7e23c75b` and stays held. The revision no longer returns a recorded result,
+  which resolves the stale-poll objection, but nothing live shows it prevents
+  the duplicate write it targets: its shipped gate passes on unchanged `main`
+  and has no baseline mode, the #1317 repeated-write gate was not run on it,
+  and in the one live observation the model repeated the call straight after
+  the notice. Smaller items: a `console.log` in `antigravityRuntime.ts`, tests
+  that still pass with the dispatch gate, the `resume()` clear or `is_error`
+  removed, and six commits authored by `Claude <noreply@anthropic.com>`, so a
+  merge needs an explicit `--body`.
+- #1361 (@jaedync, raw control characters in tool arguments) is reviewed and
+  held for an owner decision, not merged. Head `b07e11254`, CI green, merges
+  cleanly. Its fixture stands were rerun here with real Claude Code 2.1.296 and
+  real Pi 1.2.0: `e2e-capped-turns.mjs --case=unparsed-input --stream` (plus
+  `--headerless`, `--deferred`) and `e2e-pi-unparsed-tool-input.mjs` pass on
+  the PR and the Pi stand fails as expected on `f8eea2c35`. The live gate is
+  open: in 10 live Opus 5.5 edits of TAB-indented source with fine-grained tool
+  streaming on, the model never emitted a raw TAB, so the defect was not
+  reproduced with a real model here or by the contributor. Review ruled out
+  double execution (the rejection match needs the error envelope, the id and
+  the resolved name, and any captured sibling vetoes recovery). Two product
+  questions remain: the repair also doubles invalid backslash escapes, which
+  for clients other than Pi turns a rejected call into an executable one whose
+  argument is a guess (`C:\Users\new` reads `\n` as a newline); and tools
+  with only string arguments are not buffered, so a strict client gets
+  `stop_reason: tool_use` over arguments it cannot parse. Narrower options:
+  keep only the control-character escaping, or limit the unbuffered case to Pi.
+- A squash with an explicit `--body` carries no automatic `Co-authored-by`
+  line (observed on #1201); without one, every commit author on the branch is
+  added (#1213).
+- The earlier preparation branches for these two
+  (`codex/sonnet-context-1213-20261012`, `codex/checkpoint-pairs-1201-20261012`)
+  are superseded and must not be merged.
+
+## Plugin config isolation — #1360 (2026-10-13)
+
+Nowaker's own PR #1360 carries the change; maintainer tests, CLI help and
+evidence are separate commits on their branch. This replaces draft #1362, which
+held a cherry-picked copy and is closed unmerged. With `MERIDIAN_CONFIG_DIR`
+set, plugin discovery and `plugins.json` follow that directory; explicit
+`MERIDIAN_PLUGIN_DIR` / `MERIDIAN_PLUGIN_CONFIG` still win. Unchanged main fails
+both isolation assertions and the real CLI probe; the candidate passes them
+through the source CLI and a packed, installed CLI.
+[Receipts and harness](evidence/1360-plugin-config-20261012/README.md).
+Not run: model inference through a plugin loaded from a relocated config
+directory. The change only moves two default paths, so no request path differs.
+
 ## Current Nix runtime integration — #1342 → #1357
 
 Authored current-main incorporation26e2dd4a5/dd4bf666 preserves Connor Grady's

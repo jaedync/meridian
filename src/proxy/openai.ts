@@ -832,21 +832,45 @@ export interface SseTranslatorContext {
  *
  * Anthropic's wire format signals start/end of each content block; OpenAI's
  * does not, so we manufacture an index per stream.
+ *
+ * Argument deltas are routed by their Anthropic block `index`, not by "the
+ * most recently started tool": a block's arguments can arrive after a later
+ * tool block has started, and attributing them to the newer call corrupts
+ * both calls' JSON. An indexed delta whose block never started as a tool is
+ * dropped rather than attached to another call. Events without an `index`
+ * keep the most-recent-tool routing.
  */
 export function createSseTranslator(ctx: SseTranslatorContext): SseTranslator {
   let toolCallIndex = -1 // -1 means "no tools used yet", becomes 0 on first block
+  const toolCallIndexByBlock = new Map<number, number>()
   let lastUsage: AnthropicUsage | undefined
 
   const translate = ((event: AnthropicSseEvent) => {
+    const blockIndex = typeof event.index === "number" ? event.index : undefined
+    let eventToolCallIndex = toolCallIndex
     // Increment must use the same condition the pure translator uses to
     // decide a tool-start chunk gets emitted, otherwise indexes drift if a
     // malformed event is skipped.
-    if (
-      event.type === "content_block_start" &&
-      event.content_block?.type === "tool_use" &&
-      typeof event.content_block.name === "string"
+    if (event.type === "content_block_start") {
+      if (
+        event.content_block?.type === "tool_use" &&
+        typeof event.content_block.name === "string"
+      ) {
+        toolCallIndex++
+        eventToolCallIndex = toolCallIndex
+        if (blockIndex !== undefined) toolCallIndexByBlock.set(blockIndex, toolCallIndex)
+      } else if (blockIndex !== undefined) {
+        // A reused block index no longer belongs to an earlier tool call.
+        toolCallIndexByBlock.delete(blockIndex)
+      }
+    } else if (
+      event.type === "content_block_delta" &&
+      event.delta?.type === "input_json_delta" &&
+      blockIndex !== undefined
     ) {
-      toolCallIndex++
+      const owner = toolCallIndexByBlock.get(blockIndex)
+      if (owner === undefined) return null
+      eventToolCallIndex = owner
     }
 
     if (event.type === "message_start" && event.message?.usage) {
@@ -862,7 +886,7 @@ export function createSseTranslator(ctx: SseTranslatorContext): SseTranslator {
       ctx.completionId,
       ctx.model,
       ctx.created,
-      toolCallIndex,
+      eventToolCallIndex,
       ctx.thinkingPassthrough,
     )
   }) as SseTranslator
@@ -1073,9 +1097,10 @@ const FULL_CAPABILITIES: ModelCapabilities = Object.freeze({
  * @param extendedContextIncluded - whether the caller's subscription includes
  *   the 1M window on the Opus/Fable tiers (Max, Team, Enterprise). Callers
  *   derive this from `subscriptionIncludesExtendedContext` in models.ts so the
- *   advertised window matches what the proxy actually routes to. Sonnet stays
- *   200k on every plan because Sonnet 1M is always billed as Extra Usage, and
- *   Haiku 5.5 has a native 1M window without a [1m] suffix; legacy 4.5 is 200k.
+ *   advertised window matches what the proxy actually routes to. Sonnet 5+
+ *   runs with a native 1M window on every plan (#1212); Sonnet 4.6 stays 200k
+ *   because its 1M variant is billed as Extra Usage. Haiku 5.5 has a native
+ *   1M window without a [1m] suffix; legacy 4.5 is 200k.
  */
 export function buildModelList(extendedContextIncluded: boolean, now = Math.floor(Date.now() / 1000)): OpenAiModel[] {
   return [
@@ -1085,7 +1110,7 @@ export function buildModelList(extendedContextIncluded: boolean, now = Math.floo
       created: now,
       owned_by: "anthropic",
       display_name: "Claude Sonnet 5.5",
-      context_window: 200_000,
+      context_window: 1_000_000,
       capabilities: FULL_CAPABILITIES,
     },
     {
@@ -1094,7 +1119,7 @@ export function buildModelList(extendedContextIncluded: boolean, now = Math.floo
       created: now,
       owned_by: "anthropic",
       display_name: "Claude Sonnet 5",
-      context_window: 200_000,
+      context_window: 1_000_000,
       capabilities: FULL_CAPABILITIES,
     },
     {

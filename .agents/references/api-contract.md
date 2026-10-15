@@ -24,6 +24,8 @@ External plugins depend on these interfaces. **Changes require project owner app
 | `POST /v1/messages` request/response format | `server.ts` | All agents (Anthropic API contract) |
 | `GET /profiles/list` response shape | `server.ts` | Profile management UI and CLI |
 | `GET /inflight` response shape and loopback-only access | `server.ts`, `inflight.ts` | Loopback supervisors observing `scope: client-http`; not a restart/admission barrier (#1216) |
+| `POST`/`DELETE /drain` request/response and local operator access | `server.ts`, `admissionHold.ts` | Owner-approved #1282: bounded per-instance generation delay; actual loopback/no forwarding/no Origin, configured API key required; aggregate `draining`/`drain` in `GET /inflight`, no restart guarantee |
+| `GET /readyz` status and `upstream-claude` check, `/health` `upstream.claude` block, loopback-only `PUT /upstream-reachability` | `server.ts`, `probes.ts`, `upstreamReachability.ts` | Instance-local native-Claude transport failure observations, default readiness policy and bounded operator override; owner-approved in #1281 |
 | `POST /profiles/active` request/response | `server.ts` | Profile switching from CLI and UI |
 If you need to modify any of these, open an issue first — breaking changes affect downstream plugin authors.
 
@@ -90,3 +92,16 @@ unresolved guard. This is not active-process restoration or client-tool executio
 journaling. Failed official read-only probes impose a five-second readiness
 cooldown with HTTP 503 and Retry-After. Both changes are within #1073's recovery
 and failure-handling scope.
+
+The owner approved #1281's corrected full reachability contract on 2026-10-05.
+Claude/combined health adds aggregate `upstream.claude` observations without raw
+errors or account identities. The state is local and ephemeral; configured-egress
+transport answers do not prove Anthropic origin, account validity or inference.
+Default readiness requires three definite connection failures spanning 120 seconds
+and holds until 300 seconds after the latest failure; the subsequent probing state
+is passive. Null retry statuses and generic read timeouts do not establish failure.
+The loopback override has optional configured-key protection, the exact existing
+hostname Origin policy and a bounded TTL; no public ProxyConfig or global CORS
+expansion is approved. Standalone/mounted Antigravity probes remain unchanged.
+Correctness, actual affected-flow evidence and final-head CI remain acceptance
+gates distinct from this approval. No release is authorized.

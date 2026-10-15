@@ -17,6 +17,11 @@ export function healthHostname() {
   return hostnameEnabled() ? { hostname: hostname() } : {}
 }
 
+/** Shared browser-write policy. Forwarding headers never confer authority. */
+export function permitsLocalBrowserWrite(request: Request): boolean {
+  return isSameOriginRequest(request)
+}
+
 /** Authentication belongs to the caller's existing settings-route boundary. */
 export async function headerSettingsResponse(request: Request): Promise<Response> {
   const headers = { "Cache-Control": "no-store" }
@@ -24,7 +29,7 @@ export async function headerSettingsResponse(request: Request): Promise<Response
 
   // The optional API key does not prevent a foreign site from opting an
   // unkeyed local server into public disclosure.
-  if (!isSameOriginRequest(request)) {
+  if (!permitsLocalBrowserWrite(request)) {
     return Response.json({ error: "Header settings require a same-origin request" }, { status: 403, headers })
   }
   let input: unknown

@@ -205,8 +205,9 @@ describe("isStreamedToolBlockComplete", () => {
     expect(isStreamedToolBlockComplete(completeBlock({ json: '{"command":"echo a\necho b"}' }))).toBe(true)
   })
 
-  it("accepts object JSON whose strings hold an invalid escape", () => {
-    expect(isStreamedToolBlockComplete(completeBlock({ json: '{"file_path":"C:\\dev\\x"}' }))).toBe(true)
+  it("refuses object JSON whose strings hold an invalid backslash escape", () => {
+    expect(isStreamedToolBlockComplete(completeBlock({ json: '{"file_path":"C:\\dev\\x"}' }))).toBe(false)
+    expect(isStreamedToolBlockComplete(completeBlock({ json: '{"file_path":"C:\\Users\\new"}' }))).toBe(false)
   })
 
   it("still refuses truncated or non-object JSON after repair", () => {

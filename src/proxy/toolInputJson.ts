@@ -1,6 +1,6 @@
 /**
- * Tool input JSON that is complete but malformed inside its string literals.
- * Pure leaf module: no I/O, no imports.
+ * Tool input JSON that is complete but holds raw control characters inside its
+ * string literals. Pure leaf module: no I/O, no imports.
  *
  * When fine-grained tool streaming is on (for example
  * CLAUDE_CODE_ENABLE_FINE_GRAINED_TOOL_STREAMING=1, which query.ts sets for the
@@ -8,13 +8,12 @@
  * JSON validation.
  * A model editing a tab-indented file can then emit a raw TAB inside a string.
  * Claude Code rejects such a call before PreToolUse ("could not be parsed as
- * JSON"), but a passthrough client still receives the streamed deltas. Pi
- * repairs exactly these defects (pi-ai `repairJson` / `parseJsonWithRepair`),
- * so the repair below mirrors those semantics: it must never accept input
- * that Pi's repair would reject or read differently.
+ * JSON"), but a passthrough client still receives the streamed deltas.
+ * Only raw U+0000–U+001F characters inside string literals are escaped;
+ * invalid backslash escapes (such as unescaped Windows paths like C:\Users\new)
+ * are left untouched so JSON.parse rejects them rather than silently corrupting
+ * mixed valid/invalid escapes.
  */
-
-const VALID_JSON_ESCAPES = new Set(['"', "\\", "/", "b", "f", "n", "r", "t", "u"])
 
 const CONTROL_ESCAPES: Readonly<Record<string, string>> = {
   "\b": "\\b",
@@ -29,10 +28,10 @@ function escapeControlCharacter(char: string): string {
 }
 
 /**
- * Escape raw U+0000–U+001F characters inside string literals and double a
- * backslash that precedes an invalid escape character. Text outside string
- * literals is copied unchanged, so truncation and structural errors survive
- * the repair and still fail to parse.
+ * Escape raw U+0000–U+001F characters inside string literals. Backslash escape
+ * sequences and text outside string literals are copied unchanged, so invalid
+ * backslash escapes, truncation, and structural errors survive the repair and
+ * still fail to parse.
  */
 export function repairJsonStringLiterals(json: string): string {
   let repaired = ""
@@ -51,23 +50,12 @@ export function repairJsonStringLiterals(json: string): string {
     }
     if (char === "\\") {
       const next = json[index + 1]
-      if (next === undefined) {
-        repaired += "\\\\"
-        continue
-      }
-      if (next === "u" && /^[0-9a-fA-F]{4}$/.test(json.slice(index + 2, index + 6))) {
-        repaired += `\\u${json.slice(index + 2, index + 6)}`
-        index += 5
-        continue
-      }
-      if (VALID_JSON_ESCAPES.has(next)) {
-        // A `\u` without four hex digits stays as written, as in pi-ai, so
-        // the parser still rejects it.
+      if (next === '"' || next === "\\") {
         repaired += `\\${next}`
         index += 1
         continue
       }
-      repaired += "\\\\"
+      repaired += "\\"
       continue
     }
     repaired += char.charCodeAt(0) <= 0x1f ? escapeControlCharacter(char) : char
@@ -91,9 +79,10 @@ function tryParse(json: string): { ok: true; value: unknown } | { ok: false } {
 }
 
 /**
- * Parse complete tool input as a JSON object, accepting only the string
- * literal defects that `repairJsonStringLiterals` fixes. Returns undefined
- * for truncated JSON, any other syntax error, and non-object roots.
+ * Parse complete tool input as a JSON object, accepting only raw control
+ * character defects inside string literals that `repairJsonStringLiterals`
+ * fixes. Returns undefined for invalid backslash escapes, truncated JSON, any
+ * other syntax error, and non-object roots.
  */
 export function parseToolInputObject(json: string): Record<string, unknown> | undefined {
   const strict = tryParse(json)

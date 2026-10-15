@@ -16,6 +16,9 @@ const headerless = process.argv.includes("--headerless")
 // the bare name (and once with the registered name, which the hook drops as
 // the hidden digest) until the real CLI reports max_turns (4).
 const deferred = process.argv.includes("--deferred")
+// #1364: the model names a tool the client never declared. The CLI refuses it
+// the same way; the request is OpenCode-shaped, where the failure was reported.
+const undeclared = process.argv.find(arg => arg.startsWith("--undeclared="))?.slice(13)
 // unparsed-input: the fixture streams a registered-name call whose arguments
 // hold a raw TAB inside a string, a shape that fine-grained tool streaming
 // lets through. The real CLI must reject it as unparseable before
@@ -23,6 +26,7 @@ const deferred = process.argv.includes("--deferred")
 const unparsed = mode === "unparsed-input"
 const cliRejection = mode === "client-refusal" || unparsed
 if (deferred) assert(cliRejection, "The deferred budget is only tested with CLI refusal recovery")
+if (undeclared !== undefined) assert(undeclared && mode === "client-refusal" && !headerless, "An undeclared name is only tested with keyed CLI refusal recovery")
 if (headerless) assert(cliRejection, "Headerless Pi is only tested with CLI refusal recovery")
 assert(["partial", "empty", "thinking", "unhandled", "retry", "retry-resume", "pinned", "client-refusal", "unparsed-input"].includes(mode))
 if (cliRejection) assert(stream, "CLI refusal recovery is streaming-only")
@@ -53,6 +57,7 @@ const tool = unparsed
       properties: { oldText: { type: "string" }, newText: { type: "string" } }, required: ["oldText", "newText"] } } },
     required: ["path", "edits"] } }
   : { name: "read_fixture", description: "Read synthetic data without side effects", input_schema: { type: "object", properties: {} } }
+const emittedName = undeclared ?? tool.name
 // The TABs are literal characters inside JSON strings, split mid-string.
 const rawTabDeltas = ['{"path":"/fixture/render.ts","edits":[{"oldText":"\tlet text = \\"\\";', '\\n\\treturn text;","newText":"\tconst text = \\"\\";"}]}']
 const rawTabInput = { path: "/fixture/render.ts", edits: [{ oldText: "\tlet text = \"\";\n\treturn text;", newText: "\tconst text = \"\";" }] }
@@ -76,7 +81,8 @@ const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request
     if (apiPhase === "followup") {
       const history = JSON.stringify(body.messages)
       assert(history.includes(receipt), "The fresh CLI must receive the client's real result")
-      if (cliRejection) {
+      if (undeclared) assert(history.includes(undeclared), "Fresh replay lost the undeclared tool name")
+      else if (cliRejection) {
         const registeredName = body.tools.find(candidate => candidate.name.endsWith(tool.name))?.name
         assert(history.includes(registeredName), "Fresh replay did not use the registered MCP tool name")
       }
@@ -92,8 +98,8 @@ const upstream = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request
         ? { type: "tool_use", id: `${toolId}_retry${apiCalls}`, name: registeredName, input: {}, partialJson: [JSON.stringify(rawTabInput)] }
         : { type: "tool_use", id: apiCalls === 1 ? toolId : `${toolId}_retry${apiCalls}`, name: registeredName, input: {}, partialJson: rawTabDeltas }]
       : mode === "client-refusal" && capFault
-      ? [apiCalls === 1 ? { type: "tool_use", id: toolId, name: tool.name, input: {} }
-        : { type: "tool_use", id: `${toolId}_retry${apiCalls}`, name: apiCalls === 2 ? registeredName : tool.name, input: {} }]
+      ? [apiCalls === 1 ? { type: "tool_use", id: toolId, name: emittedName, input: {} }
+        : { type: "tool_use", id: `${toolId}_retry${apiCalls}`, name: apiCalls === 2 ? registeredName : emittedName, input: {} }]
       : handoff ? [{ type: "tool_use", id: toolId, name: body.tools.find(candidate => candidate.name.endsWith(tool.name)).name, input: {} }]
       : [mode === "thinking" ? { type: "thinking", thinking: "internal fixture reasoning", signature: "fixture-signature" } : { type: "text", text },
         ...(capFault ? [{ type: "tool_use", id: "toolu_missing_fixture", name: "__cap_fixture_missing__", input: {} }] : [])]
@@ -181,7 +187,7 @@ function parseClientInput(json) {
 }
 async function request(messages, includeTools = true) {
   const headers = { "content-type": "application/json" }
-  if (cliRejection) {
+  if (cliRejection && !undeclared) {
     headers["x-meridian-agent"] = "pi"
     headers["user-agent"] = "pi/0.85.0"
     if (!headerless) headers["x-session-affinity"] = "cap-cli-refusal"
@@ -266,16 +272,18 @@ try {
     success(response, "tool_use")
     assert.equal(response.content.length, 1)
     assert.equal(response.content[0].id, toolId)
-    assert.equal(response.content[0].name, tool.name)
+    assert.equal(response.content[0].name, emittedName)
     if (unparsed) assert.deepEqual(response.content[0].input, rawTabInput)
     if (!headerless) assert.equal(capQueries[0].resume, source)
     assert(!hooks.some(hook => hook.phase === "cap" && hook.id === toolId), "CLI executed a client tool instead of rejecting it")
     assert(rejections.some(result => result.phase === "cap" && result.attempt === 1 && result.id === toolId &&
-      JSON.stringify(result.content).includes(unparsed ? "could not be parsed as JSON" : "No such tool available: " + tool.name)),
-    "Real CLI did not reject the declared tool call")
+      JSON.stringify(result.content).includes(unparsed ? "could not be parsed as JSON" : "No such tool available: " + emittedName)),
+    "Real CLI did not reject the tool call")
     phase = "followup"
+    // Pi omits `tools` on the result turn; OpenCode resends them and answers
+    // an unknown name with its own error result.
     const followup = await request([...messages, { role: "assistant", content: response.content },
-      { role: "user", content: [{ type: "tool_result", tool_use_id: toolId, content: receipt }] }], false)
+      { role: "user", content: [{ type: "tool_result", tool_use_id: toolId, content: receipt, ...(undeclared ? { is_error: true } : {}) }] }], Boolean(undeclared))
     success(followup, "end_turn")
     assert.equal(followup.content.filter(block => block.type === "text").map(block => block.text).join(""), receipt)
     assert.equal(queries.at(-1).resume, undefined, "Rejected SDK checkpoint was reused")
@@ -288,7 +296,7 @@ try {
     else assert.equal(response.status, 500, response.raw)
   }
   assert.deepEqual(upstreamErrors, [])
-  console.log(JSON.stringify({ result: "PASS", mode, stream, deferred, root, withheld, queries, results,
+  console.log(JSON.stringify({ result: "PASS", mode, stream, deferred, undeclared, root, withheld, queries, results,
     rejections: rejections.map(({ phase, attempt, id }) => ({ phase, attempt, id })), upstreamCalls }))
 } finally {
   await proxy.close()

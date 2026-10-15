@@ -187,6 +187,11 @@ src/
 │   ├── sessionTree.ts         ← Live parent→child request registry; subtree cancellation (PURE bookkeeping)
 │   ├── shutdown.ts            ← Bounded HTTP drain and connection tracking
 │   ├── inflight.ts            ← Per-upstream in-flight request counts for GET /inflight (PURE bookkeeping)
+│   ├── admissionHold.ts       ← Bounded per-instance generation reservations for the best-effort POST /drain hold
+│   ├── drainBody.ts           ← Tiny operator body byte/deadline limits and joined reader cancellation
+│   ├── generationAdmission.ts ← Exact combined-provider generation classification and response-reader ownership
+│   ├── upstreamReachability.ts ← Pure instance-local native-Claude transport observations for /readyz and /health
+│   ├── upstreamReachabilityConfig.ts ← Dynamic environment/settings acquisition injected by server orchestration
 │   ├── adapter.ts             ← AgentAdapter interface (extensibility point for multi-agent support)
 │   ├── adapters/
 │   │   ├── opencode.ts        ← OpenCode adapter (session headers, CWD extraction, tool config)
@@ -315,7 +320,17 @@ server.ts (HTTP layer)
    policy for settings that disclose something or choose what runs lives in
    `src/sameOrigin.ts` (standard web types only), used by the header and
    Claude Code executable settings. Backend auth remains at each caller's
-   existing boundary.
+   existing boundary. Shared same-origin browser-write policy is
+   reused by the loopback reachability override; it confers no peer/key authority.
+   `upstreamReachability.ts` has no imports or settings/filesystem I/O; its
+   normalizer, tracker and native-message observer default to pure constants.
+   Each proxy creates its own tracker and injects the per-evaluation callback
+   from `upstreamReachabilityConfig.ts`, the only reachability module that
+   acquires current environment/settings values. Its pass-through observer stays outside the
+   idle guard, preserving direct SDK teardown, and reads only that query's native
+   messages. Bounded response/parent identities prevent old completion/replay
+   from supplying fresh transport evidence. Native event dialect acceptance is
+   separate from direct mocked/pure verification (#1281).
 
 5. **No circular dependencies.** If you need to share types, put them in `types.ts` or the relevant leaf module.
 
@@ -350,6 +365,8 @@ Agent-specific behavior is isolated behind the `AgentAdapter` interface (`adapte
 |--------|-------------|
 | `getSessionId(c)` | Extract session ID from request headers |
 | `getAgentMode(c, body)` | Normalize an adapter-specific primary/subagent declaration |
+| `getRootSessionId(c, body)` | Optional conversation root for account routing (sticky and priority assignment): a subagent with a session key of its own stays on its parent's account (Claude Code's Agent tool) |
+| `isAuxiliaryRequest(c, body)` | Declare a side call that shares the conversation's session key: it skips session lookup, publication and the turn lease (Claude Code's auto-mode classifier, progress captions and tool-less side calls) |
 | `extractWorkingDirectory(body)` | Parse working directory from request body |
 | `normalizeContent(content)` | Normalize message content for hashing |
 | `getBlockedBuiltinTools()` | SDK tools replaced by agent's MCP equivalents |
@@ -381,6 +398,16 @@ lineage and one turn lease, which cost the user's first turn either a 400
 therefore appends the agent name for non-primary agents (`ses_x#title`), leaving
 the primary agent's key byte-identical to the header. An adapter whose client
 multiplexes agents over one session id needs the same treatment.
+
+Claude Code is the second such client: its Agent-tool subagents send the
+conversation's own `metadata.user_id` session id, so `claudeCodeAdapter`
+keys a request carrying `x-claude-code-agent-id` as `<sid>:agent:<agentId>`
+and leaves the main conversation on the bare `<sid>`. `getRootSessionId`
+keeps those subagents on the conversation's account under sticky and
+priority routing. Known limitation: a backgrounded main session (and a
+fork-of-main subagent) gets a fresh agent id but carries the whole
+transcript, so its first request under the new key is one full-history
+replay; later turns resume normally.
 
 **A session header is identity, never authentication.** Polytoken's native
 `X-Polytoken-Conversation` header supplies the trimmed conversation identity,
@@ -478,7 +505,8 @@ Three properties bound it:
   cancel children; a subagent routinely outlives the turn that spawned it. The
   shutdown path already aborts every request directly, and the lease watchdog is
   a proxy-side fence rather than a user intent, so neither cascades.
-- **Live requests only.** An entry exists between "admitted" and "settled". A
+- **Live requests only.** An entry exists between parsed live arrival and
+  settlement, including a bounded pre-admission generation hold (#1282). A
   session that was seen once but has nothing in flight is not a cancellation
   target, so the registry is bounded by concurrency, not by history.
 - **Self-gating.** Propagation can only reach a request that declared a parent,
@@ -487,6 +515,17 @@ Three properties bound it:
 `POST /v1/sessions/:key/cancel` cancels a subtree explicitly, and
 `GET /telemetry/summary` reports the live gauges and cumulative counts under
 `sessionTree`.
+
+The per-instance soft hold is separate from process shutdown. Private body,
+translation and held-request ownership keeps close and idle exit aware of
+pending work while `/inflight.total` reports only admitted client HTTP response
+lifetimes. OpenAI translations transfer one instance-owned reservation and
+abort link to Messages, where existing adapters derive one cancellation
+identity. Held adapter selection stays fixed so a config edit cannot change
+the identity used by the live tree/turn lease at execution. Estimates and
+control routes bypass the hold; combined-provider POST counting remains as
+before. No accepted connection, background job or client-tool process becomes
+restart-transferable through this hold.
 
 ## Testing Strategy
 
