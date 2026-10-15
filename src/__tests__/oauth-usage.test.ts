@@ -35,7 +35,9 @@ function makeStore(token: string | null): CredentialStore {
   return {
     async read() {
       if (!token) return null
-      return { claudeAiOauth: { accessToken: token, refreshToken: "rt", expiresAt: Date.now() + 60_000 } } as any
+      // An hour out, well clear of any refresh-before-expiry margin, so these
+      // tests never reach the real token endpoint.
+      return { claudeAiOauth: { accessToken: token, refreshToken: "rt", expiresAt: Date.now() + 3_600_000 } } as any
     },
     async write() { return true },
   }
@@ -397,7 +399,9 @@ describe("oauthUsage", () => {
     const store: CredentialStore = {
       async read() {
         if (!token) return null
-        return { claudeAiOauth: { accessToken: token, refreshToken: "rt", expiresAt: Date.now() + 60_000 } } as any
+        // An hour out, well clear of any refresh-before-expiry margin, so these
+      // tests never reach the real token endpoint.
+      return { claudeAiOauth: { accessToken: token, refreshToken: "rt", expiresAt: Date.now() + 3_600_000 } } as any
       },
       async write() { return true },
     }
