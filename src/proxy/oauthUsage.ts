@@ -13,13 +13,16 @@
  *
  * We reuse `tokenRefresh.ts`'s cross-platform credential store (macOS Keychain
  * or `~/.claude/.credentials.json`) to read the access token. We refresh it on
- * 401, and before the call when it has expired.
+ * 401, before the call when it has expired, and once after a run of 429s
+ * (reports say the endpoint rate-limits per access token, so a new token gets a
+ * new bucket).
  *
  * Per-profile caching: each profile has its own 30s TTL cache so multi-account
  * setups can be queried independently without cross-contamination. Concurrent
  * callers for the same profile share a single in-flight request.
  */
 
+import { createHash } from "node:crypto"
 import { claudeLog } from "../logger"
 import { isCredentialsReadOnly } from "./credentialsMode"
 import { parseRetryAfterMs } from "./retryAfter"
@@ -194,12 +197,25 @@ const RATE_LIMIT_BACKOFF_MS_DEFAULT = 60_000
 // failed refresh before its retry). An expired token has drawn 429s from this
 // endpoint, not 401s, so the 401 path alone does not cover it.
 const EXPIRY_REFRESH_MARGIN_MS = 60_000
+// A community report on anthropics/claude-code#31021 says the usage endpoint
+// rate-limits per access token, so one token's bucket can stay full while a
+// new token reads fine (not measured here). After this many 429s in a row on
+// one token, refresh once to get a new token and a new bucket.
+const RATE_LIMIT_REFRESH_AFTER = 3
+// At most one 429-triggered refresh per profile in this window. A real rate
+// limit outlasts a new token, and each refresh rotates the refresh token, so
+// an unbounded retry would spend refresh grants for nothing.
+const RATE_LIMIT_REFRESH_WINDOW_MS = 60 * 60_000
 
 /** Per-profile cache. Key = profileId (or DEFAULT_KEY for the unscoped default). */
 const cacheByProfile = new Map<string, OAuthUsageSnapshot>()
 const inflightByProfile = new Map<string, Promise<RawUsageResult>>()
 const rateLimitedUntilByProfile = new Map<string, number>()
 const failureByProfile = new Map<string, OAuthUsageFailure>()
+/** The current run of 429s: which token drew them (a hash, never the token)
+ *  and how many in a row. */
+const rateLimitRunByProfile = new Map<string, { tokenHash: string; count: number }>()
+const lastRateLimitRefreshAtByProfile = new Map<string, number>()
 const DEFAULT_KEY = "__default__"
 
 function recordFailure(cacheKey: string, reason: OAuthUsageError): void {
@@ -329,6 +345,25 @@ async function tokenForCall(store: CredentialStore, refresh: RefreshFn, cacheKey
   return (await refreshAndRead(store, refresh, cacheKey, "expiry")) ?? token
 }
 
+/** Count a 429 against the token that drew it. A new token starts a new run. */
+function countRateLimited(cacheKey: string, token: string): number {
+  const tokenHash = createHash("sha256").update(token).digest("hex")
+  const prev = rateLimitRunByProfile.get(cacheKey)
+  const count = prev?.tokenHash === tokenHash ? prev.count + 1 : 1
+  rateLimitRunByProfile.set(cacheKey, { tokenHash, count })
+  return count
+}
+
+/** Whether this 429 run may spend the profile's one refresh for the window.
+ *  Claims the window when it says yes, so a failed refresh counts too. */
+function claimRateLimitRefresh(cacheKey: string, runLength: number): boolean {
+  if (runLength < RATE_LIMIT_REFRESH_AFTER || isCredentialsReadOnly()) return false
+  const last = lastRateLimitRefreshAtByProfile.get(cacheKey)
+  if (last !== undefined && Date.now() - last < RATE_LIMIT_REFRESH_WINDOW_MS) return false
+  lastRateLimitRefreshAtByProfile.set(cacheKey, Date.now())
+  return true
+}
+
 /** Minimal fetch shape used by callAnthropic. Avoids `typeof fetch`'s
  *  `preconnect` property, which makes test casts unwieldy. */
 type FetchLike = (input: string, init?: RequestInit) => Promise<Response>
@@ -353,6 +388,30 @@ async function callAnthropic(
     }
   }
   return (await res.json()) as RawOAuthUsageResponse
+}
+
+type UsageCallResult = Awaited<ReturnType<typeof callAnthropic>>
+
+/**
+ * Count a 429 into its token's run; once the run is long enough and the
+ * profile's window allows it, refresh and retry once with the new token.
+ * Returns the result to report: the retry's, or the original 429. The caller
+ * applies the cooldown to whatever 429 comes back, so a failed refresh or a
+ * second 429 leaves the throttle as it was.
+ */
+async function retryAfterRateLimitRun(
+  limited: UsageCallResult,
+  ctx: { store: CredentialStore; refresh: RefreshFn; cacheKey: string; token: string; fetchImpl: FetchLike },
+): Promise<UsageCallResult> {
+  const runLength = countRateLimited(ctx.cacheKey, ctx.token)
+  if (!claimRateLimitRefresh(ctx.cacheKey, runLength)) return limited
+  claudeLog("oauth_usage.refresh_on_429", { profile: ctx.cacheKey, runLength })
+  const newToken = await refreshAndRead(ctx.store, ctx.refresh, ctx.cacheKey, "rate_limited")
+  if (!newToken) return limited
+  const retried = await callAnthropic(newToken, ctx.fetchImpl)
+  if ("__status" in retried && retried.__status === 429) countRateLimited(ctx.cacheKey, newToken)
+  else rateLimitRunByProfile.delete(ctx.cacheKey)
+  return retried
 }
 
 export interface FetchOAuthUsageOpts {
@@ -494,7 +553,7 @@ async function fetchOAuthUsageImpl(opts?: FetchOAuthUsageOpts): Promise<RawUsage
 
   const promise = (async () => {
     try {
-      const token = await tokenForCall(store, refresh, cacheKey)
+      let token = await tokenForCall(store, refresh, cacheKey)
       if (!token) {
         // This read failing intermittently (e.g. a Keychain entry racing a
         // token-refresh rewrite) was previously silent — log it so flapping
@@ -518,7 +577,13 @@ async function fetchOAuthUsageImpl(opts?: FetchOAuthUsageOpts): Promise<RawUsage
         }
         const newToken = await readAccessToken(store)
         if (!newToken) return staleOr("no_token_after_refresh", "no_token")
+        token = newToken
         result = await callAnthropic(newToken, fetchImpl)
+      }
+      if ("__status" in result && result.__status === 429) {
+        result = await retryAfterRateLimitRun(result, { store, refresh, cacheKey, token, fetchImpl })
+      } else {
+        rateLimitRunByProfile.delete(cacheKey)
       }
       if ("__status" in result) {
         if (result.__status === 429) {
@@ -579,4 +644,6 @@ export function resetOAuthUsageCache(): void {
   inflightByProfile.clear()
   rateLimitedUntilByProfile.clear()
   failureByProfile.clear()
+  rateLimitRunByProfile.clear()
+  lastRateLimitRefreshAtByProfile.clear()
 }

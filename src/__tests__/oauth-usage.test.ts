@@ -738,15 +738,104 @@ describe("token refresh outside the 401 path", () => {
     expect(result.error).toBe("rate_limited")
   })
 
-  test("a read-only instance does not refresh an expired token", async () => {
+  test("a run of 429s on one token refreshes once and retries with the new token", async () => {
+    const { store, refreshImpl, getRefreshes } = rotatingStore()
+    const { fetchImpl, seen } = tokenFetch(token => token === "old" ? limited() : ok())
+    const opts = { force: true, store, refreshImpl, fetchImpl, profileId: "run-429", rateLimitBackoffMs: 0 }
+
+    expect((await fetchOAuthUsageResult(opts)).error).toBe("rate_limited")
+    expect((await fetchOAuthUsageResult(opts)).error).toBe("rate_limited")
+    expect(getRefreshes()).toBe(0)
+
+    const third = await fetchOAuthUsageResult(opts)
+    expect(getRefreshes()).toBe(1)
+    expect(seen).toEqual(["old", "old", "old", "new1"])
+    expect(third.error).toBeNull()
+    expect(third.snapshot).not.toBeNull()
+    expect(third.failure).toBeNull()
+  })
+
+  test("a second 429 run inside the window does not refresh again", async () => {
+    const { store, refreshImpl, getRefreshes } = rotatingStore()
+    const { fetchImpl } = tokenFetch(limited)
+    const opts = { force: true, store, refreshImpl, fetchImpl, profileId: "window", rateLimitBackoffMs: 0 }
+
+    for (let i = 0; i < 3; i++) await fetchOAuthUsageResult(opts)
+    expect(getRefreshes()).toBe(1)
+
+    // The retry on new1 opened a fresh run; push it well past the threshold.
+    for (let i = 0; i < 5; i++) await fetchOAuthUsageResult(opts)
+    expect(getRefreshes()).toBe(1)
+  })
+
+  test("allows another 429 refresh once the window has passed", async () => {
+    const start = Date.now()
+    setSystemTime(start)
+    const { store, refreshImpl, getRefreshes } = rotatingStore()
+    const { fetchImpl } = tokenFetch(limited)
+    const opts = { force: true, store, refreshImpl, fetchImpl, profileId: "window-lapsed", rateLimitBackoffMs: 0 }
+
+    for (let i = 0; i < 3; i++) await fetchOAuthUsageResult(opts)
+    expect(getRefreshes()).toBe(1)
+
+    setSystemTime(start + HOUR + 1_000)
+    for (let i = 0; i < 3; i++) await fetchOAuthUsageResult(opts)
+    expect(getRefreshes()).toBe(2)
+  })
+
+  test("a success between 429s breaks the run", async () => {
+    const { store, refreshImpl, getRefreshes } = rotatingStore()
+    let call = 0
+    const { fetchImpl } = tokenFetch(() => ++call === 3 ? ok() : limited())
+    const opts = { force: true, store, refreshImpl, fetchImpl, profileId: "broken-run", rateLimitBackoffMs: 0 }
+
+    for (let i = 0; i < 4; i++) await fetchOAuthUsageResult(opts)
+
+    expect(getRefreshes()).toBe(0)
+  })
+
+  test("a token rotated by someone else starts a new run", async () => {
+    const { store, refreshImpl, getRefreshes } = rotatingStore()
+    const { fetchImpl } = tokenFetch(limited)
+    const opts = { force: true, store, refreshImpl, fetchImpl, profileId: "rotated", rateLimitBackoffMs: 0 }
+
+    await fetchOAuthUsageResult(opts)
+    await fetchOAuthUsageResult(opts)
+    // Another process (the CLI, the background scheduler) renews the token.
+    await refreshImpl()
+    await fetchOAuthUsageResult(opts)
+    await fetchOAuthUsageResult(opts)
+
+    expect(getRefreshes()).toBe(1)
+  })
+
+  test("a failed 429 refresh leaves the cooldown in force", async () => {
+    const { store, refreshImpl, getRefreshes } = rotatingStore({ refreshOk: false })
+    const { fetchImpl, seen } = tokenFetch(limited)
+    const opts = { force: true, store, refreshImpl, fetchImpl, profileId: "refresh-dead", rateLimitBackoffMs: 0 }
+
+    await fetchOAuthUsageResult(opts)
+    await fetchOAuthUsageResult(opts)
+    const third = await fetchOAuthUsageResult({ ...opts, rateLimitBackoffMs: 60_000 })
+    expect(getRefreshes()).toBe(1)
+    expect(third.error).toBe("rate_limited")
+    expect(third.failure?.consecutiveFailures).toBe(3)
+
+    const suppressed = await fetchOAuthUsageResult({ ...opts, rateLimitBackoffMs: 60_000 })
+    expect(suppressed.error).toBe("rate_limited")
+    expect(seen).toEqual(["old", "old", "old"])
+  })
+
+  test("a read-only instance refreshes neither on expiry nor on a 429 run", async () => {
     process.env.MERIDIAN_CREDENTIALS_READONLY = "1"
     const { store, refreshImpl, getRefreshes } = rotatingStore({ expiresAt: Date.now() - HOUR })
     const { fetchImpl, seen } = tokenFetch(limited)
+    const opts = { force: true, store, refreshImpl, fetchImpl, profileId: "readonly", rateLimitBackoffMs: 0 }
 
-    await fetchOAuthUsageResult({ force: true, store, refreshImpl, fetchImpl, profileId: "readonly" })
+    for (let i = 0; i < 4; i++) await fetchOAuthUsageResult(opts)
 
     expect(getRefreshes()).toBe(0)
-    expect(seen).toEqual(["old"])
+    expect(seen).toEqual(["old", "old", "old", "old"])
   })
 
   test("a 401 still refreshes and retries with the new token", async () => {
