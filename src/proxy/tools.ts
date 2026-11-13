@@ -7,6 +7,14 @@
  */
 
 /**
+ * The SDK built-in that loads deferred (`defer_loading`) tool definitions on
+ * demand. Passthrough keeps it in the otherwise empty built-in catalog when a
+ * request defers tools; the proxy runs it inside the SDK and hides it from the
+ * client.
+ */
+export const SDK_TOOL_SEARCH_TOOL = "ToolSearch"
+
+/**
  * Block SDK built-in tools so Claude only uses MCP tools
  * (which have correct param names for the calling agent).
  */

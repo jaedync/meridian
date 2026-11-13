@@ -444,6 +444,33 @@ describe("buildQueryOptions", () => {
     expect(allowed).toContain("mcp__passthrough__custom_tool")
   })
 
+  // The CLI only offers tool search when ToolSearch is in its tool list;
+  // `tools: []` removed it, so client `defer_loading` reached the SDK but
+  // every deferred definition still went upstream in full (the CLI logs
+  // "ToolSearchTool is not available"). Keep exactly that one built-in.
+  it("keeps only ToolSearch in the catalog when the request defers tools", () => {
+    const passthroughMcp = createPassthroughMcpServer(
+      [{ name: "core_tool" }, { name: "rare_tool", defer_loading: true }],
+      undefined,
+      "passthrough",
+    )
+    const result = buildQueryOptions(makeContext({
+      passthrough: true,
+      passthroughMcp,
+      hasDeferredTools: passthroughMcp.hasDeferredTools,
+    }))
+    expect((result.options as any).tools).toEqual(["ToolSearch"])
+    expect((result.options as any).disallowedTools).not.toContain("ToolSearch")
+    expect((result.options as any).env.ENABLE_TOOL_SEARCH).toBe("true")
+  })
+
+  it("keeps the catalog empty when no tool is deferred", () => {
+    const passthroughMcp = createPassthroughMcpServer([{ name: "core_tool" }], undefined, "passthrough")
+    const result = buildQueryOptions(makeContext({ passthrough: true, passthroughMcp, hasDeferredTools: false }))
+    expect((result.options as any).tools).toEqual([])
+    expect((result.options as any).env.ENABLE_TOOL_SEARCH).toBe("false")
+  })
+
   it("does NOT set tools: [] in non-passthrough mode (catalog must remain available)", () => {
     // OpenCode and other coding-agent adapters need the SDK to invoke
     // built-ins like Read/Write/Bash. The catalog stays the SDK default.

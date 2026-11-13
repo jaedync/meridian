@@ -11,6 +11,7 @@ import type { Options, OutputFormat, SdkBeta, SettingSource, ThinkingConfig } fr
 import { createOpencodeMcpServer } from "../mcpTools"
 import { createPassthroughMcpServer, PASSTHROUGH_MCP_NAME } from "./passthroughTools"
 import { env, envInt } from "../env"
+import { SDK_TOOL_SEARCH_TOOL } from "./tools"
 import type { Effort } from "./effort"
 import { haikuThinkingCompatibilityError } from "./haikuCompatibility"
 
@@ -651,7 +652,15 @@ export function buildQueryOptions(ctx: QueryContext, abortController?: AbortCont
             // from the upstream payload. Setting `tools: []` elides the
             // catalog from the request body. Closes #489 (diagnosis by
             // @albe-jj).
-            tools: [],
+            //
+            // The one exception is ToolSearch when the request defers tools:
+            // the CLI offers tool search only when ToolSearch is in this list,
+            // so an empty list sent every deferred definition upstream in full
+            // ("ToolSearchTool is not available" in the CLI debug log). It
+            // follows `hasDeferredTools` (client `defer_loading` marks, or the
+            // session's pinned auto-defer decision), like ENABLE_TOOL_SEARCH
+            // and maxTurns, so it changes only when that decision changes.
+            tools: hasDeferredTools ? [SDK_TOOL_SEARCH_TOOL] : [],
             disallowedTools: [...allBlockedTools],
             ...(passthroughMcp ? {
               allowedTools: [...passthroughMcp.toolNames],
