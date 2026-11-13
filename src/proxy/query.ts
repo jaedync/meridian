@@ -570,6 +570,28 @@ export const SCRATCHPAD_COUNTER_INSTRUCTION =
   `or system temporary directory as requested by the user.\n` +
   `</meridian-note>`
 
+/**
+ * Compact listing of deferred MCP tool names for passthrough turns when
+ * `CLAUDE_CODE_DISABLE_ATTACHMENTS=1` suppresses the CLI's native
+ * `deferred_tools_delta` attachment (#1368).
+ */
+export function buildDeferredToolsNote(deferredToolNames: readonly string[]): string {
+  if (deferredToolNames.length === 0) return ""
+  return (
+    `\n<meridian-note>\n` +
+    `The following deferred tools are available via ToolSearch (call ToolSearch with "select:<tool_name>" or keywords to load their schemas before invoking them):\n` +
+    `${deferredToolNames.join("\n")}\n` +
+    `</meridian-note>`
+  )
+}
+
+function attachmentsDisabled(ctx: QueryContext): boolean {
+  const raw = ctx.envOverrides?.CLAUDE_CODE_DISABLE_ATTACHMENTS
+    ?? ctx.cleanEnv.CLAUDE_CODE_DISABLE_ATTACHMENTS
+    ?? (process.env.MERIDIAN_SUPPRESS_IMPLICIT_ATTACHMENTS !== "0" ? "1" : "")
+  return ["1", "true", "yes", "on"].includes(String(raw).toLowerCase().trim())
+}
+
 function resolveSystemPrompt(
   systemContext: string | undefined,
   passthrough: boolean,
@@ -577,6 +599,7 @@ function resolveSystemPrompt(
   codeSystemPrompt: boolean | undefined,
   clientSystemPrompt: boolean | undefined,
   cwdNote: string,
+  deferredToolsNote: string = "",
 ): { systemPrompt?: string | { type: "preset"; preset: "claude_code"; append?: string } } {
   const hasSettings = settingSources != null && settingSources.length > 0
   const usePreset = codeSystemPrompt ?? (hasSettings || (!passthrough && !!systemContext))
@@ -588,18 +611,19 @@ function resolveSystemPrompt(
   if (usePreset) {
     // Always non-empty: the gitStatus correction applies to every preset
     // request, whether or not the client sent a system prompt.
-    const append = [clientContext, cwdNote, GIT_STATUS_PROVENANCE_NOTE, REPLAY_PROVENANCE_NOTE, scratchpadNote].filter(Boolean).join("")
+    const append = [clientContext, cwdNote, GIT_STATUS_PROVENANCE_NOTE, REPLAY_PROVENANCE_NOTE, scratchpadNote, deferredToolsNote].filter(Boolean).join("")
     return { systemPrompt: { type: "preset" as const, preset: "claude_code" as const, append } }
   }
   const append = [clientContext, cwdNote].filter(Boolean).join("") || undefined
-  if (append) return { systemPrompt: append + REPLAY_PROVENANCE_NOTE + scratchpadNote }
+  const tailNotes = REPLAY_PROVENANCE_NOTE + scratchpadNote + deferredToolsNote
+  if (append) return { systemPrompt: append + tailNotes }
   // Transport provenance is separate from the optional client prompt and
   // Claude Code persona. A plain string keeps an explicitly disabled preset
   // disabled, rather than letting an omitted option restore the SDK default.
-  if (codeSystemPrompt === false) return { systemPrompt: REPLAY_PROVENANCE_NOTE + scratchpadNote }
+  if (codeSystemPrompt === false) return { systemPrompt: tailNotes }
   // An omitted systemPrompt previously selected the SDK's default preset.
   // Preserve that choice while attaching the same transport note.
-  return { systemPrompt: { type: "preset", preset: "claude_code", append: REPLAY_PROVENANCE_NOTE + scratchpadNote } }
+  return { systemPrompt: { type: "preset", preset: "claude_code", append: tailNotes } }
 }
 
 export function buildQueryOptions(ctx: QueryContext, abortController?: AbortController): BuildQueryResult {
@@ -672,7 +696,12 @@ export function buildQueryOptions(ctx: QueryContext, abortController?: AbortCont
       ...(stream || passthrough ? { includePartialMessages: true } : {}),
       permissionMode: "bypassPermissions" as const,
       allowDangerouslySkipPermissions: true,
-      ...resolveSystemPrompt(systemContext, passthrough, settingSources, codeSystemPrompt, clientSystemPrompt, cwdNote),
+      ...resolveSystemPrompt(
+        systemContext, passthrough, settingSources, codeSystemPrompt, clientSystemPrompt, cwdNote,
+        passthrough && hasDeferredTools && attachmentsDisabled(ctx)
+          ? buildDeferredToolsNote(passthroughMcp?.deferredToolNames ?? [])
+          : "",
+      ),
       ...(passthrough
         ? {
             // Strip the SDK's ~25k-token built-in tool catalog from the

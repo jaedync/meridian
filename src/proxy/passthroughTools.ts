@@ -336,6 +336,12 @@ export function createPassthroughMcpServer(
     serverName,
     prefix,
     toolNames: definitions.map(definition => `${prefix}${definition.name}`),
+    /** Sorted with the definitions, so the note built from it is stable per tool set. */
+    deferredToolNames: hasDeferredTools
+      ? definitions
+          .filter(definition => !definition._meta?.["anthropic/alwaysLoad"])
+          .map(definition => `${prefix}${definition.name}`)
+      : [],
     hasDeferredTools,
     clientNameByAlias: aliases.clientNameByAlias,
   }
